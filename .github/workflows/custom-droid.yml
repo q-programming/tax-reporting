@@ -455,26 +455,6 @@ jobs:
             const prUrl = '${{ steps.create-pr.outputs.pr_url }}';
             const repository = '${{ github.repository }}';
             const runId = '${{ github.run_id }}';
-            const triggerCommentId = '${{ steps.reaction.outputs.trigger_comment_id }}';
-            
-            // Add final reaction to original comment
-            if (triggerCommentId) {
-              let reaction = '';
-              if (success && hasChanges) {
-                reaction = 'rocket'; // 🚀 for successful changes
-              } else if (success && !hasChanges) {
-                reaction = '+1'; // 👍 for completed but no changes
-              } else {
-                reaction = 'confused'; // 😕 for failures
-              }
-              
-              await github.rest.reactions.createForIssueComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: triggerCommentId,
-                content: reaction
-              });
-            }
             
             // Create a reply comment with results
             let body = '';
@@ -484,24 +464,24 @@ jobs:
               const prAlreadyExisted = '${{ steps.check-pr.outputs.pr_exists }}' === 'true';
               
               if (isNewPr) {
-                body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
+                body = '🤖 Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
                        '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
               } else if (hasChanges) {
-                body = '✅ Done! I have updated PR #' + newPrNumber + ' with the additional changes.\n\n' +
+                body = '🤖 Done! I have updated PR #' + newPrNumber + ' with the additional changes.\n\n' +
                        '**Review:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
               } else if (prAlreadyExisted) {
-                body = '✅ Changes already applied! See PR #' + newPrNumber + ' (created in a previous run).\n\n' +
+                body = '🤖 Changes already applied! See PR #' + newPrNumber + ' (created in a previous run).\n\n' +
                        '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
               }
             } else if (success && !hasChanges && !newPrNumber) {
-              body = '✅ Task completed - no changes needed.\n\n' +
+              body = '🤖 Task completed - no changes needed.\n\n' +
                      'The code already meets the requirements or I could not find anything to change.\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             } else {
-              body = '❌ Task failed\n\n' +
+              body = '🤖 Task failed\n\n' +
                      'Check the workflow run for details.\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             }
