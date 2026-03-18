@@ -175,25 +175,37 @@ jobs:
       - name: Detect available skills
         id: detect-skills
         run: |
-          SKILLS=""
+          SKILL_LIST=""
           if [ -d ".factory/skills" ]; then
             for skill_dir in .factory/skills/*/; do
               if [ -f "${skill_dir}SKILL.md" ]; then
                 skill_name=$(basename "$skill_dir")
-                SKILLS="${SKILLS} --skill ${skill_name}"
+                if [ -z "$SKILL_LIST" ]; then
+                  SKILL_LIST="$skill_name"
+                else
+                  SKILL_LIST="$SKILL_LIST, $skill_name"
+                fi
               fi
             done
           fi
-          echo "skills=${SKILLS}" >> $GITHUB_OUTPUT
-          echo "Detected skills:${SKILLS}"
+          echo "skill_list=${SKILL_LIST}" >> $GITHUB_OUTPUT
+          echo "Detected skills: ${SKILL_LIST}"
 
-      - name: Run Droid with detected skills
+      - name: Run Droid
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
         run: |
-          cat > /tmp/droid-prompt.txt << 'EOF'
+          SKILL_PROMPT=""
+          if [ -n "${{ steps.detect-skills.outputs.skill_list }}" ]; then
+            SKILL_PROMPT="Available skills in .factory/skills: ${{ steps.detect-skills.outputs.skill_list }}
+          Use these skills to guide your work and follow the coding standards they define.
+          "
+          fi
+          
+          cat > /tmp/droid-prompt.txt << EOF
           You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
           
+          ${SKILL_PROMPT}
           User Request: ${{ steps.extract.outputs.user_request }}
           
           Context:
@@ -204,12 +216,11 @@ jobs:
           
           Instructions:
           1. Analyze the user's request carefully
-          2. If skills are available, use them to understand the coding standards and best practices
-          3. Explore the codebase to understand the project structure and conventions
-          4. Make the necessary code changes following established patterns and standards
-          5. Run relevant checks after making changes (lint, typecheck, tests, build, etc.)
-          6. Commit your changes with a clear, descriptive message following conventional commit format
-          7. Provide a summary of what you did
+          2. Explore the codebase to understand the project structure and conventions
+          3. Make the necessary code changes following established patterns and standards
+          4. Run relevant checks after making changes (lint, typecheck, tests, build, etc.)
+          5. Commit your changes with a clear, descriptive message following conventional commit format
+          6. Provide a summary of what you did
           
           Guidelines:
           - Follow existing code patterns and conventions in the repository
@@ -220,7 +231,7 @@ jobs:
           - Test your changes thoroughly
           EOF
           
-          $HOME/.local/bin/droid exec --skip-permissions-unsafe ${{ steps.detect-skills.outputs.skills }} -f /tmp/droid-prompt.txt
+          $HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/droid-prompt.txt
 
       - name: Commit and push changes
         id: push
