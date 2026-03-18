@@ -1,20 +1,39 @@
 import { useState } from 'react';
 
+/**
+ * Props for the {@link DummyComponent}
+ */
 interface DummyComponentProps {
+  /** The heading text displayed at the top of the component */
   title: string;
+  /** Numeric value shown below the title; also controls the number of generated items and the warning threshold (>10). Defaults to 0. */
   count?: number;
+  /** Optional list of string items rendered under the "Items from Props" section. Defaults to an empty array. */
   items?: string[];
 }
 
+/**
+ * A multipurpose demo component that showcases several interactive features:
+ * - Displays a title and a numeric count
+ * - Toggles a warning message when the count exceeds 10
+ * - Provides a todo list with add/remove capabilities
+ * - Renders a list of items received via props
+ * - Generates a list of items based on the count value
+ *
+ * @param props - {@link DummyComponentProps}
+ * @returns JSX element rendering the demo component with interactive sections
+ */
 export function DummyComponent({ title, count = 0, items = [] }: DummyComponentProps) {
   const [hasWarning, setHasWarning] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [todoList, setTodoList] = useState<string[]>([]);
 
+  /** Sets the warning flag to `true` when the current count exceeds 10 */
   const handleWarningToggle = () => {
     setHasWarning(count > 10);
   };
 
+  /** Appends the current input value to the todo list and clears the input. No-ops if the input is blank or whitespace-only. */
   const addTodo = () => {
     if (inputValue.trim()) {
       setTodoList([...todoList, inputValue]);
@@ -22,6 +41,10 @@ export function DummyComponent({ title, count = 0, items = [] }: DummyComponentP
     }
   };
 
+  /**
+   * Removes a todo item from the list by its index
+   * @param index - Zero-based position of the item to remove
+   */
   const removeTodo = (index: number) => {
     const newList = todoList.filter((_, i) => i !== index);
     setTodoList(newList);
