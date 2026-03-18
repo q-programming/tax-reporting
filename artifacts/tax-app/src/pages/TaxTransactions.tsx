@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useTaxTransactions } from "@/hooks/use-tax-data";
 import { format } from "date-fns";
 import { Search, ArrowUpDown, Download, Filter, FilePlus } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

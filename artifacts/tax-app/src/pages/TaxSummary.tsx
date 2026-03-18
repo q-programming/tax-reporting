@@ -174,7 +174,7 @@ export default function TaxSummary() {
                       verticalAlign="bottom" 
                       height={36}
                       iconType="circle"
-                      formatter={(value, entry, index) => <span className="text-foreground font-medium">{value}</span>}
+                      formatter={(value) => <span className="text-foreground font-medium">{value}</span>}
                     />
                   </PieChart>
                 </ResponsiveContainer>
@@ -187,7 +187,17 @@ export default function TaxSummary() {
   );
 }
 
-function KpiCard({ title, value, icon: Icon, isLoading, trend, trendUp, highlight = false }: any) {
+interface KpiCardProps {
+  title: string;
+  value?: string | number;
+  icon: React.ElementType;
+  isLoading: boolean;
+  trend?: string;
+  trendUp?: boolean;
+  highlight?: boolean;
+}
+
+function KpiCard({ title, value, icon: Icon, isLoading, trend, trendUp, highlight = false }: KpiCardProps) {
   return (
     <Card className={cn(
       "relative overflow-hidden transition-all duration-300 hover:shadow-md",
@@ -213,7 +223,7 @@ function KpiCard({ title, value, icon: Icon, isLoading, trend, trendUp, highligh
         ) : (
           <>
             <div className="text-3xl font-bold font-display tracking-tight">
-              {formatCurrency(value || 0)}
+              {formatCurrency(typeof value === 'number' ? value : parseFloat(value || '0'))}
             </div>
             {trend && (
               <p className={cn(
