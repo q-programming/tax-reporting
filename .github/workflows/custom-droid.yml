@@ -209,26 +209,37 @@ jobs:
       - name: Run Droid
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          SKILL_LIST: ${{ steps.detect-skills.outputs.skill_list }}
+          USER_REQUEST: ${{ steps.extract.outputs.user_request }}
+          PR_NUMBER: ${{ steps.extract.outputs.pr_number }}
+          BASE_BRANCH: ${{ steps.extract.outputs.base_branch }}
+          HEAD_BRANCH: ${{ steps.extract.outputs.head_branch }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          SKILL_PROMPT=""
-          if [ -n "${{ steps.detect-skills.outputs.skill_list }}" ]; then
-            SKILL_PROMPT=$(printf "Available skills in .factory/skills: %s\nUse these skills to guide your work and follow the coding standards they define.\n" "${{ steps.detect-skills.outputs.skill_list }}")
-          fi
-          
           # Save current HEAD for comparison later
           git rev-parse HEAD > /tmp/before-droid.txt
           
-          cat > /tmp/droid-prompt.txt <<EOF
-          You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
+          # Build skill prompt if skills are available
+          if [ -n "$SKILL_LIST" ]; then
+            echo "You are a senior software engineer with vast knowledge and experience in best practices and coding standards." > /tmp/droid-prompt.txt
+            echo "" >> /tmp/droid-prompt.txt
+            echo "Available skills in .factory/skills: $SKILL_LIST" >> /tmp/droid-prompt.txt
+            echo "Use these skills to guide your work and follow the coding standards they define." >> /tmp/droid-prompt.txt
+            echo "" >> /tmp/droid-prompt.txt
+          else
+            echo "You are a senior software engineer with vast knowledge and experience in best practices and coding standards." > /tmp/droid-prompt.txt
+            echo "" >> /tmp/droid-prompt.txt
+          fi
           
-          \${SKILL_PROMPT}
-          User Request: \${{ steps.extract.outputs.user_request }}
+          # Add the rest of the prompt
+          cat >> /tmp/droid-prompt.txt <<EOF
+          User Request: $USER_REQUEST
           
           Context:
-          - This is PR #\${{ steps.extract.outputs.pr_number }}
-          - Base branch: \${{ steps.extract.outputs.base_branch }}
-          - Current branch: \${{ steps.extract.outputs.head_branch }}
-          - Repository: \${{ github.repository }}
+          - This is PR #$PR_NUMBER
+          - Base branch: $BASE_BRANCH
+          - Current branch: $HEAD_BRANCH
+          - Repository: $REPOSITORY
           
           Instructions:
           1. Analyze the user's request carefully
@@ -346,14 +357,15 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const userRequest = '${{ steps.extract.outputs.user_request }}';
-            const headBranch = '${{ steps.extract.outputs.head_branch }}';
-            const prNumber = '${{ steps.extract.outputs.pr_number }}';
-            const repository = '${{ github.repository }}';
-            const runId = '${{ github.run_id }}';
+            const userRequest = ${{ toJSON(steps.extract.outputs.user_request) }};
+            const headBranch = ${{ toJSON(steps.extract.outputs.head_branch) }};
+            const prNumber = ${{ toJSON(steps.extract.outputs.pr_number) }};
+            const repository = ${{ toJSON(github.repository) }};
+            const runId = ${{ toJSON(github.run_id) }};
+            const droidBranch = ${{ toJSON(steps.setup-branch.outputs.droid_branch) }};
             
-            const isFollowup = '${{ steps.setup-branch.outputs.is_followup }}' === 'true';
-            const generatedDesc = `${{ steps.generate-description.outputs.description }}`;
+            const isFollowup = ${{ toJSON(steps.setup-branch.outputs.is_followup) }} === 'true';
+            const generatedDesc = ${{ toJSON(steps.generate-description.outputs.description) }} || '';
             
             const prTitle = '🤖 Droid: ' + userRequest;
             
@@ -377,7 +389,7 @@ jobs:
               const { data: prs } = await github.rest.pulls.list({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                head: context.repo.owner + ':${{ steps.setup-branch.outputs.droid_branch }}',
+                head: context.repo.owner + ':' + droidBranch,
                 base: headBranch,
                 state: 'open'
               });
@@ -408,7 +420,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: prTitle,
-              head: '${{ steps.setup-branch.outputs.droid_branch }}',
+              head: droidBranch,
               base: headBranch,
               body: prBody
             });
