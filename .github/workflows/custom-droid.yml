@@ -1,0 +1,333 @@
+name: Custom Droid
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened, assigned]
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [opened, edited]
+
+jobs:
+  custom-droid:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@droid')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@droid')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@droid')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@droid') || contains(github.event.issue.title, '@droid'))) ||
+      (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '@droid') || contains(github.event.pull_request.title, '@droid')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect package manager
+        id: detect-pm
+        run: |
+          if [ -f "pnpm-lock.yaml" ]; then
+            echo "pm=pnpm" >> $GITHUB_OUTPUT
+            echo "lockfile=pnpm-lock.yaml" >> $GITHUB_OUTPUT
+          elif [ -f "yarn.lock" ]; then
+            echo "pm=yarn" >> $GITHUB_OUTPUT
+            echo "lockfile=yarn.lock" >> $GITHUB_OUTPUT
+          elif [ -f "package-lock.json" ]; then
+            echo "pm=npm" >> $GITHUB_OUTPUT
+            echo "lockfile=package-lock.json" >> $GITHUB_OUTPUT
+          else
+            echo "pm=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup pnpm
+        if: steps.detect-pm.outputs.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup Node.js
+        if: steps.detect-pm.outputs.pm != 'none'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          node-version: '20'
+          cache: ${{ steps.detect-pm.outputs.pm }}
+
+      - name: Install dependencies
+        if: steps.detect-pm.outputs.pm != 'none'
+        run: |
+          if [ "${{ steps.detect-pm.outputs.pm }}" = "pnpm" ]; then
+            pnpm install --frozen-lockfile
+          elif [ "${{ steps.detect-pm.outputs.pm }}" = "yarn" ]; then
+            yarn install --frozen-lockfile
+          elif [ "${{ steps.detect-pm.outputs.pm }}" = "npm" ]; then
+            npm ci
+          fi
+
+      - name: Install Droid CLI
+        run: |
+          curl -fsSL https://app.factory.ai/cli | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Extract comment and PR info
+        id: extract
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prNumber, commentBody, commentId;
+            
+            // Handle different event types
+            if (context.eventName === 'issue_comment') {
+              const comment = context.payload.comment;
+              const isPR = !!context.payload.issue.pull_request;
+              
+              if (!isPR) {
+                core.setFailed('This workflow only works on pull requests');
+                return;
+              }
+              
+              prNumber = context.payload.issue.number;
+              commentBody = comment.body;
+              commentId = comment.id;
+            } else if (context.eventName === 'pull_request_review_comment') {
+              const comment = context.payload.comment;
+              prNumber = context.payload.pull_request.number;
+              commentBody = comment.body;
+              commentId = comment.id;
+            } else if (context.eventName === 'pull_request_review') {
+              const review = context.payload.review;
+              prNumber = context.payload.pull_request.number;
+              commentBody = review.body;
+              commentId = review.id;
+            } else if (context.eventName === 'pull_request') {
+              const pr = context.payload.pull_request;
+              prNumber = pr.number;
+              commentBody = pr.body || pr.title;
+              commentId = null;
+            } else if (context.eventName === 'issues') {
+              // For issues, we'll just create a comment and exit
+              core.info('Issues support not yet implemented');
+              return;
+            }
+            
+            // Get PR details
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            // Extract command from comment/body
+            const droidMatch = commentBody?.match(/@droid\s+(.+)/);
+            const userRequest = droidMatch ? droidMatch[1].trim() : 'review this code';
+
+            core.setOutput('pr_number', prNumber);
+            core.setOutput('user_request', userRequest);
+            core.setOutput('base_branch', pr.base.ref);
+            core.setOutput('head_branch', pr.head.ref);
+            core.setOutput('comment_id', commentId || '');
+
+      - name: Setup branch
+        id: setup-branch
+        run: |
+          # Fetch the PR branch
+          git fetch origin ${{ steps.extract.outputs.head_branch }}
+          git checkout ${{ steps.extract.outputs.head_branch }}
+          
+          # Create a sanitized branch name from user request
+          REQUEST="${{ steps.extract.outputs.user_request }}"
+          SANITIZED=$(echo "$REQUEST" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-30)
+          TIMESTAMP=$(date +%s)
+          DROID_BRANCH="droid/pr-${{ steps.extract.outputs.pr_number }}/${SANITIZED}-${TIMESTAMP}"
+          git checkout -b "${DROID_BRANCH}"
+          
+          echo "droid_branch=${DROID_BRANCH}" >> $GITHUB_OUTPUT
+          echo "sanitized_request=${SANITIZED}" >> $GITHUB_OUTPUT
+
+      - name: Create tracking comment
+        id: tracking
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: comment } = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.extract.outputs.pr_number }},
+              body: `🤖 Working on it...\n\nRequest: \`${{ steps.extract.outputs.user_request }}\``
+            });
+            core.setOutput('tracking_comment_id', comment.id);
+
+      - name: Detect available skills
+        id: detect-skills
+        run: |
+          SKILLS=""
+          if [ -d ".factory/skills" ]; then
+            for skill_dir in .factory/skills/*/; do
+              if [ -f "${skill_dir}SKILL.md" ]; then
+                skill_name=$(basename "$skill_dir")
+                SKILLS="${SKILLS} --skill ${skill_name}"
+              fi
+            done
+          fi
+          echo "skills=${SKILLS}" >> $GITHUB_OUTPUT
+          echo "Detected skills:${SKILLS}"
+
+      - name: Run Droid with detected skills
+        env:
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          # Create prompt file
+          cat > /tmp/droid-prompt.txt << 'EOF'
+          You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
+
+          User Request: "${{ steps.extract.outputs.user_request }}"
+
+          Context:
+          - This is PR #${{ steps.extract.outputs.pr_number }}
+          - Base branch: ${{ steps.extract.outputs.base_branch }}
+          - Current branch: ${{ steps.extract.outputs.head_branch }}
+          - Repository: ${{ github.repository }}
+
+          Instructions:
+          1. Analyze the user's request carefully
+          2. If skills are available, use them to understand the coding standards and best practices
+          3. Explore the codebase to understand the project structure and conventions
+          4. Make the necessary code changes following established patterns and standards
+          5. Run relevant checks after making changes (lint, typecheck, tests, build, etc.)
+          6. Commit your changes with a clear, descriptive message following conventional commit format
+          7. Provide a summary of what you did
+
+          Guidelines:
+          - Follow existing code patterns and conventions in the repository
+          - Use the package manager detected in the project (npm, yarn, or pnpm)
+          - Look for package.json scripts to understand available commands
+          - Fix all errors and warnings before committing
+          - Write clean, maintainable, well-documented code
+          - Test your changes thoroughly
+          EOF
+
+          # Run droid exec with detected skills
+          $HOME/.local/bin/droid exec \
+            --prompt-file /tmp/droid-prompt.txt \
+            ${{ steps.detect-skills.outputs.skills }} \
+            --max-turns 20
+
+      - name: Commit and push changes
+        id: push
+        run: |
+          git config --global user.name "droid[bot]"
+          git config --global user.email "droid[bot]@users.noreply.github.com"
+          
+          if [[ -n $(git status -s) ]]; then
+            # Detect commit type from user request
+            REQUEST_LOWER=$(echo "${{ steps.extract.outputs.user_request }}" | tr '[:upper:]' '[:lower:]')
+            
+            if [[ "$REQUEST_LOWER" == *"fix"* ]] || [[ "$REQUEST_LOWER" == *"bug"* ]]; then
+              COMMIT_TYPE="fix"
+            elif [[ "$REQUEST_LOWER" == *"add"* ]] || [[ "$REQUEST_LOWER" == *"implement"* ]]; then
+              COMMIT_TYPE="feat"
+            elif [[ "$REQUEST_LOWER" == *"refactor"* ]]; then
+              COMMIT_TYPE="refactor"
+            elif [[ "$REQUEST_LOWER" == *"test"* ]]; then
+              COMMIT_TYPE="test"
+            elif [[ "$REQUEST_LOWER" == *"doc"* ]]; then
+              COMMIT_TYPE="docs"
+            elif [[ "$REQUEST_LOWER" == *"style"* ]] || [[ "$REQUEST_LOWER" == *"format"* ]]; then
+              COMMIT_TYPE="style"
+            else
+              COMMIT_TYPE="chore"
+            fi
+            
+            git add -A
+            git commit -m "${COMMIT_TYPE}: ${{ steps.extract.outputs.user_request }}" \
+                       -m "Automated changes by @droid" \
+                       -m "Original request: ${{ steps.extract.outputs.user_request }}" \
+                       -m "Related to PR #${{ steps.extract.outputs.pr_number }}"
+            git push origin ${{ steps.setup-branch.outputs.droid_branch }}
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.push.outputs.has_changes == 'true'
+        id: create-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const userRequest = '${{ steps.extract.outputs.user_request }}';
+            const headBranch = '${{ steps.extract.outputs.head_branch }}';
+            const prNumber = '${{ steps.extract.outputs.pr_number }}';
+            const repository = '${{ github.repository }}';
+            const runId = '${{ github.run_id }}';
+            
+            const prTitle = '🤖 Droid: ' + userRequest;
+            const prBody = '## 🤖 Automated Changes by Droid\n\n' +
+                           '**Original Request:** ' + userRequest + '\n\n' +
+                           '**Context:** This PR was automatically created in response to an @droid mention in PR #' + prNumber + '.\n\n' +
+                           '**Changes:** Review the commits below to see what Droid changed.\n\n' +
+                           '---\n\n' +
+                           '*To apply these changes to your PR, merge this PR into ' + headBranch + '*\n\n' +
+                           '[View original discussion](https://github.com/' + repository + '/pull/' + prNumber + ')\n' +
+                           '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: prTitle,
+              head: '${{ steps.setup-branch.outputs.droid_branch }}',
+              base: headBranch,
+              body: prBody
+            });
+            
+            core.setOutput('pr_number', pr.number);
+            core.setOutput('pr_url', pr.html_url);
+            return pr.number;
+
+      - name: Update tracking comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const success = '${{ job.status }}' === 'success';
+            const hasChanges = '${{ steps.push.outputs.has_changes }}' === 'true';
+            const newPrNumber = '${{ steps.create-pr.outputs.pr_number }}';
+            const userRequest = '${{ steps.extract.outputs.user_request }}';
+            const prUrl = '${{ steps.create-pr.outputs.pr_url }}';
+            const repository = '${{ github.repository }}';
+            const runId = '${{ github.run_id }}';
+            
+            let body = '';
+            
+            if (success && hasChanges && newPrNumber) {
+              body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
+                     '**Request:** ' + userRequest + '\n\n' +
+                     '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
+                     '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            } else if (success && !hasChanges) {
+              body = '✅ Task completed - no changes needed.\n\n' +
+                     '**Request:** ' + userRequest + '\n\n' +
+                     'The code already meets the requirements or I could not find anything to change.\n\n' +
+                     '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            } else {
+              body = '❌ Task failed\n\n' +
+                     '**Request:** ' + userRequest + '\n\n' +
+                     'Check the workflow run for details.\n\n' +
+                     '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            }
+            
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: ${{ steps.tracking.outputs.tracking_comment_id }},
+              body: body
+            });
