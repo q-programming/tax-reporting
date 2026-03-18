@@ -185,18 +185,16 @@ jobs:
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
         run: |
-          # Create prompt file
-          cat > /tmp/droid-prompt.txt << 'EOF'
-          You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
-
-          User Request: "${{ steps.extract.outputs.user_request }}"
-
+          PROMPT="You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
+          
+          User Request: ${{ steps.extract.outputs.user_request }}
+          
           Context:
           - This is PR #${{ steps.extract.outputs.pr_number }}
           - Base branch: ${{ steps.extract.outputs.base_branch }}
           - Current branch: ${{ steps.extract.outputs.head_branch }}
           - Repository: ${{ github.repository }}
-
+          
           Instructions:
           1. Analyze the user's request carefully
           2. If skills are available, use them to understand the coding standards and best practices
@@ -205,21 +203,16 @@ jobs:
           5. Run relevant checks after making changes (lint, typecheck, tests, build, etc.)
           6. Commit your changes with a clear, descriptive message following conventional commit format
           7. Provide a summary of what you did
-
+          
           Guidelines:
           - Follow existing code patterns and conventions in the repository
           - Use the package manager detected in the project (npm, yarn, or pnpm)
           - Look for package.json scripts to understand available commands
           - Fix all errors and warnings before committing
           - Write clean, maintainable, well-documented code
-          - Test your changes thoroughly
-          EOF
-
-          # Run droid exec with detected skills
-          $HOME/.local/bin/droid exec \
-            --prompt-file /tmp/droid-prompt.txt \
-            ${{ steps.detect-skills.outputs.skills }} \
-            --max-turns 20
+          - Test your changes thoroughly"
+          
+          $HOME/.local/bin/droid exec ${{ steps.detect-skills.outputs.skills }} --max-turns 20 "$PROMPT"
 
       - name: Commit and push changes
         id: push
