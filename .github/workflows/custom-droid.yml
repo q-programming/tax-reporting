@@ -139,19 +139,33 @@ jobs:
       - name: Setup branch
         id: setup-branch
         run: |
-          # Fetch the PR branch
-          git fetch origin ${{ steps.extract.outputs.head_branch }}
-          git checkout ${{ steps.extract.outputs.head_branch }}
+          # Fetch all branches
+          git fetch origin
           
-          # Create a sanitized branch name from user request
-          REQUEST="${{ steps.extract.outputs.user_request }}"
-          SANITIZED=$(echo "$REQUEST" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-30)
-          TIMESTAMP=$(date +%s)
-          DROID_BRANCH="droid/pr-${{ steps.extract.outputs.pr_number }}/${SANITIZED}-${TIMESTAMP}"
-          git checkout -b "${DROID_BRANCH}"
+          # Check if there's already a droid branch for this PR
+          EXISTING_DROID_BRANCH=$(git branch -r | grep "origin/droid/pr-${{ steps.extract.outputs.pr_number }}/" | head -1 | sed 's|origin/||' | xargs)
+          
+          if [ -n "$EXISTING_DROID_BRANCH" ]; then
+            # Reuse existing branch for follow-up requests
+            echo "Found existing droid branch: $EXISTING_DROID_BRANCH"
+            git checkout "$EXISTING_DROID_BRANCH"
+            git pull origin "$EXISTING_DROID_BRANCH"
+            DROID_BRANCH="$EXISTING_DROID_BRANCH"
+            IS_FOLLOWUP="true"
+          else
+            # Create new branch for first-time request
+            git checkout ${{ steps.extract.outputs.head_branch }}
+            
+            REQUEST="${{ steps.extract.outputs.user_request }}"
+            SANITIZED=$(echo "$REQUEST" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-30)
+            TIMESTAMP=$(date +%s)
+            DROID_BRANCH="droid/pr-${{ steps.extract.outputs.pr_number }}/${SANITIZED}-${TIMESTAMP}"
+            git checkout -b "${DROID_BRANCH}"
+            IS_FOLLOWUP="false"
+          fi
           
           echo "droid_branch=${DROID_BRANCH}" >> $GITHUB_OUTPUT
-          echo "sanitized_request=${SANITIZED}" >> $GITHUB_OUTPUT
+          echo "is_followup=${IS_FOLLOWUP}" >> $GITHUB_OUTPUT
 
       - name: Add reaction to trigger comment
         id: reaction
@@ -233,6 +247,44 @@ jobs:
           
           $HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/droid-prompt.txt
 
+      - name: Generate PR description
+        if: steps.setup-branch.outputs.is_followup == 'false'
+        id: generate-description
+        env:
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          # Get the diff of changes made
+          BEFORE_HEAD=$(cat /tmp/before-droid.txt)
+          AFTER_HEAD=$(git rev-parse HEAD)
+          
+          # Generate summary using git log and diff
+          cat > /tmp/summary-prompt.txt <<EOF
+          Analyze the following git commits and changes, then write a concise PR description.
+          
+          User's original request: ${{ steps.extract.outputs.user_request }}
+          
+          Commits made:
+          $(git log ${BEFORE_HEAD}..${AFTER_HEAD} --oneline)
+          
+          Files changed:
+          $(git diff --stat ${BEFORE_HEAD}..${AFTER_HEAD})
+          
+          Write a clear, professional PR description that:
+          1. Starts with a brief summary (1-2 sentences)
+          2. Lists the key changes made (bullet points)
+          3. Mentions any important technical decisions
+          4. Is under 500 characters
+          
+          Output only the PR description text, no extra commentary.
+          EOF
+          
+          DESCRIPTION=$($HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/summary-prompt.txt 2>&1 | tail -20)
+          
+          # Save to output, escaping newlines for GitHub Actions
+          echo "description<<DESCEOF" >> $GITHUB_OUTPUT
+          echo "$DESCRIPTION" >> $GITHUB_OUTPUT
+          echo "DESCEOF" >> $GITHUB_OUTPUT
+
       - name: Detect and push changes
         id: push
         run: |
@@ -300,16 +352,58 @@ jobs:
             const repository = '${{ github.repository }}';
             const runId = '${{ github.run_id }}';
             
-            const prTitle = '🤖 Droid: ' + userRequest;
-            const prBody = '## 🤖 Automated Changes by Droid\n\n' +
-                           '**Original Request:** ' + userRequest + '\n\n' +
-                           '**Context:** This PR was automatically created in response to an @droid mention in PR #' + prNumber + '.\n\n' +
-                           '**Changes:** Review the commits below to see what Droid changed.\n\n' +
-                           '---\n\n' +
-                           '*To apply these changes to your PR, merge this PR into ' + headBranch + '*\n\n' +
-                           '[View original discussion](https://github.com/' + repository + '/pull/' + prNumber + ')\n' +
-                           '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            const isFollowup = '${{ steps.setup-branch.outputs.is_followup }}' === 'true';
+            const generatedDesc = `${{ steps.generate-description.outputs.description }}`;
             
+            const prTitle = '🤖 Droid: ' + userRequest;
+            
+            let prBody;
+            if (isFollowup) {
+              // For follow-ups, just update with a comment instead
+              prBody = null;
+            } else {
+              // For new PRs, use generated description
+              prBody = '## 🤖 Automated Changes by Droid\n\n' +
+                       '**Original Request:** ' + userRequest + '\n\n' +
+                       (generatedDesc ? '**Summary:**\n' + generatedDesc + '\n\n' : '') +
+                       '---\n\n' +
+                       '*To apply these changes to your PR, merge this PR into `' + headBranch + '`*\n\n' +
+                       '[View original discussion](https://github.com/' + repository + '/pull/' + prNumber + ') | ' +
+                       '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+            }
+            
+            if (isFollowup) {
+              // Find existing PR for this branch
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: context.repo.owner + ':${{ steps.setup-branch.outputs.droid_branch }}',
+                base: headBranch,
+                state: 'open'
+              });
+              
+              if (prs.length > 0) {
+                const existingPr = prs[0];
+                
+                // Add comment about the follow-up
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingPr.number,
+                  body: '## 🔄 Follow-up Request\n\n' +
+                        '**Request:** ' + userRequest + '\n\n' +
+                        'I have updated this PR with the additional changes.\n\n' +
+                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')'
+                });
+                
+                core.setOutput('pr_number', existingPr.number);
+                core.setOutput('pr_url', existingPr.html_url);
+                core.setOutput('is_new_pr', 'false');
+                return existingPr.number;
+              }
+            }
+            
+            // Create new PR
             const { data: pr } = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -321,6 +415,7 @@ jobs:
             
             core.setOutput('pr_number', pr.number);
             core.setOutput('pr_url', pr.html_url);
+            core.setOutput('is_new_pr', 'true');
             return pr.number;
 
       - name: Update reactions and reply
@@ -360,9 +455,16 @@ jobs:
             let body = '';
             
             if (success && hasChanges && newPrNumber) {
-              body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
-                     '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
-                     '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+              const isNewPr = '${{ steps.create-pr.outputs.is_new_pr }}' === 'true';
+              if (isNewPr) {
+                body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
+                       '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
+                       '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+              } else {
+                body = '✅ Done! I have updated PR #' + newPrNumber + ' with the additional changes.\n\n' +
+                       '**Review:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
+                       '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+              }
             } else if (success && !hasChanges) {
               body = '✅ Task completed - no changes needed.\n\n' +
                      'The code already meets the requirements or I could not find anything to change.\n\n' +
