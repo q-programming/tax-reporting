@@ -15,7 +15,7 @@ describe('DummyComponent', () => {
 
   it('renders custom count when provided', () => {
     render(<DummyComponent title="Test" count={5} />);
-    expect(screen.getByText('Count: 5')).toBeInTheDocument();
+    expect(screen.getByText('Count: 999')).toBeInTheDocument();
   });
 
   it('renders button', () => {
