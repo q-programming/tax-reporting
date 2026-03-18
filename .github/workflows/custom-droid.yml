@@ -351,8 +351,32 @@ jobs:
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create Pull Request
-        if: steps.push.outputs.has_changes == 'true'
+      - name: Check for existing PR
+        id: check-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const headBranch = ${{ toJSON(steps.extract.outputs.head_branch) }};
+            const droidBranch = ${{ toJSON(steps.setup-branch.outputs.droid_branch) }};
+            
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: context.repo.owner + ':' + droidBranch,
+              base: headBranch,
+              state: 'open'
+            });
+            
+            const prExists = prs.length > 0;
+            core.setOutput('pr_exists', prExists ? 'true' : 'false');
+            if (prExists) {
+              core.setOutput('existing_pr_number', prs[0].number);
+              core.setOutput('existing_pr_url', prs[0].html_url);
+            }
+            return prExists;
+
+      - name: Create or Update Pull Request
+        if: steps.push.outputs.has_changes == 'true' || steps.check-pr.outputs.pr_exists == 'false'
         id: create-pr
         uses: actions/github-script@v7
         with:
@@ -366,54 +390,40 @@ jobs:
             
             const isFollowup = ${{ toJSON(steps.setup-branch.outputs.is_followup) }} === 'true';
             const generatedDesc = ${{ toJSON(steps.generate-description.outputs.description) }} || '';
+            const prExists = ${{ toJSON(steps.check-pr.outputs.pr_exists) }} === 'true';
+            const existingPrNumber = ${{ toJSON(steps.check-pr.outputs.existing_pr_number) }};
+            const hasChanges = ${{ toJSON(steps.push.outputs.has_changes) }} === 'true';
             
             const prTitle = '🤖 Droid: ' + userRequest;
             
-            let prBody;
-            if (isFollowup) {
-              // For follow-ups, just update with a comment instead
-              prBody = null;
-            } else {
-              // For new PRs, use generated description
-              prBody = '## 🤖 Automated Changes by Droid\n\n' +
-                       '**Original Request:** ' + userRequest + '\n\n' +
-                       (generatedDesc ? '**Summary:**\n' + generatedDesc + '\n\n' : '') +
-                       '---\n\n' +
-                       '*To apply these changes to your PR, merge this PR into `' + headBranch + '`*\n\n' +
-                       '[View original discussion](https://github.com/' + repository + '/pull/' + prNumber + ') | ' +
-                       '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
-            }
-            
-            if (isFollowup) {
-              // Find existing PR for this branch
-              const { data: prs } = await github.rest.pulls.list({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                head: context.repo.owner + ':' + droidBranch,
-                base: headBranch,
-                state: 'open'
-              });
-              
-              if (prs.length > 0) {
-                const existingPr = prs[0];
-                
-                // Add comment about the follow-up
+            // If PR already exists, just add a comment if there were changes
+            if (prExists) {
+              if (hasChanges) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: existingPr.number,
+                  issue_number: parseInt(existingPrNumber),
                   body: '## 🔄 Follow-up Request\n\n' +
                         '**Request:** ' + userRequest + '\n\n' +
                         'I have updated this PR with the additional changes.\n\n' +
                         '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')'
                 });
-                
-                core.setOutput('pr_number', existingPr.number);
-                core.setOutput('pr_url', existingPr.html_url);
-                core.setOutput('is_new_pr', 'false');
-                return existingPr.number;
               }
+              
+              core.setOutput('pr_number', existingPrNumber);
+              core.setOutput('pr_url', ${{ toJSON(steps.check-pr.outputs.existing_pr_url) }});
+              core.setOutput('is_new_pr', 'false');
+              return parseInt(existingPrNumber);
             }
+            
+            // Create new PR
+            const prBody = '## 🤖 Automated Changes by Droid\n\n' +
+                           '**Original Request:** ' + userRequest + '\n\n' +
+                           (generatedDesc ? '**Summary:**\n' + generatedDesc + '\n\n' : '') +
+                           '---\n\n' +
+                           '*To apply these changes to your PR, merge this PR into `' + headBranch + '`*\n\n' +
+                           '[View original discussion](https://github.com/' + repository + '/pull/' + prNumber + ') | ' +
+                           '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             
             // Create new PR
             const { data: pr } = await github.rest.pulls.create({
@@ -466,18 +476,24 @@ jobs:
             // Create a reply comment with results
             let body = '';
             
-            if (success && hasChanges && newPrNumber) {
+            if (success && newPrNumber) {
               const isNewPr = '${{ steps.create-pr.outputs.is_new_pr }}' === 'true';
+              const prAlreadyExisted = '${{ steps.check-pr.outputs.pr_exists }}' === 'true';
+              
               if (isNewPr) {
                 body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
                        '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
-              } else {
+              } else if (hasChanges) {
                 body = '✅ Done! I have updated PR #' + newPrNumber + ' with the additional changes.\n\n' +
                        '**Review:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                        '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
+              } else if (prAlreadyExisted) {
+                body = '✅ Changes already applied! See PR #' + newPrNumber + ' (created in a previous run).\n\n' +
+                       '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
+                       '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
               }
-            } else if (success && !hasChanges) {
+            } else if (success && !hasChanges && !newPrNumber) {
               body = '✅ Task completed - no changes needed.\n\n' +
                      'The code already meets the requirements or I could not find anything to change.\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
