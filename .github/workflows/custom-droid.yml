@@ -153,18 +153,24 @@ jobs:
           echo "droid_branch=${DROID_BRANCH}" >> $GITHUB_OUTPUT
           echo "sanitized_request=${SANITIZED}" >> $GITHUB_OUTPUT
 
-      - name: Create tracking comment
-        id: tracking
+      - name: Add reaction to trigger comment
+        id: reaction
         uses: actions/github-script@v7
         with:
           script: |
-            const { data: comment } = await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: ${{ steps.extract.outputs.pr_number }},
-              body: `🤖 Working on it...\n\nRequest: \`${{ steps.extract.outputs.user_request }}\``
-            });
-            core.setOutput('tracking_comment_id', comment.id);
+            const commentId = '${{ steps.extract.outputs.comment_id }}';
+            
+            if (commentId) {
+              // Add eyes reaction to show we're looking at it
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                content: 'eyes'
+              });
+            }
+            
+            core.setOutput('trigger_comment_id', commentId);
 
       - name: Detect available skills
         id: detect-skills
@@ -185,7 +191,8 @@ jobs:
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
         run: |
-          PROMPT="You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
+          cat > /tmp/droid-prompt.txt << 'EOF'
+          You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
           
           User Request: ${{ steps.extract.outputs.user_request }}
           
@@ -210,9 +217,10 @@ jobs:
           - Look for package.json scripts to understand available commands
           - Fix all errors and warnings before committing
           - Write clean, maintainable, well-documented code
-          - Test your changes thoroughly"
+          - Test your changes thoroughly
+          EOF
           
-          $HOME/.local/bin/droid exec ${{ steps.detect-skills.outputs.skills }} --max-turns 20 "$PROMPT"
+          $HOME/.local/bin/droid exec ${{ steps.detect-skills.outputs.skills }} -f /tmp/droid-prompt.txt
 
       - name: Commit and push changes
         id: push
@@ -286,7 +294,7 @@ jobs:
             core.setOutput('pr_url', pr.html_url);
             return pr.number;
 
-      - name: Update tracking comment
+      - name: Update reactions and reply
         if: always()
         uses: actions/github-script@v7
         with:
@@ -298,29 +306,47 @@ jobs:
             const prUrl = '${{ steps.create-pr.outputs.pr_url }}';
             const repository = '${{ github.repository }}';
             const runId = '${{ github.run_id }}';
+            const triggerCommentId = '${{ steps.reaction.outputs.trigger_comment_id }}';
             
+            // Add final reaction to original comment
+            if (triggerCommentId) {
+              let reaction = '';
+              if (success && hasChanges) {
+                reaction = 'rocket'; // 🚀 for successful changes
+              } else if (success && !hasChanges) {
+                reaction = '+1'; // 👍 for completed but no changes
+              } else {
+                reaction = 'confused'; // 😕 for failures
+              }
+              
+              await github.rest.reactions.createForIssueComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: triggerCommentId,
+                content: reaction
+              });
+            }
+            
+            // Create a reply comment with results
             let body = '';
             
             if (success && hasChanges && newPrNumber) {
               body = '✅ Done! I have created PR #' + newPrNumber + ' with the requested changes.\n\n' +
-                     '**Request:** ' + userRequest + '\n\n' +
                      '**Review and merge:** [PR #' + newPrNumber + '](' + prUrl + ')\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             } else if (success && !hasChanges) {
               body = '✅ Task completed - no changes needed.\n\n' +
-                     '**Request:** ' + userRequest + '\n\n' +
                      'The code already meets the requirements or I could not find anything to change.\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             } else {
               body = '❌ Task failed\n\n' +
-                     '**Request:** ' + userRequest + '\n\n' +
                      'Check the workflow run for details.\n\n' +
                      '[View workflow run](https://github.com/' + repository + '/actions/runs/' + runId + ')';
             }
             
-            await github.rest.issues.updateComment({
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              comment_id: ${{ steps.tracking.outputs.tracking_comment_id }},
+              issue_number: ${{ steps.extract.outputs.pr_number }},
               body: body
             });
