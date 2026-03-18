@@ -1,4 +1,4 @@
-name: Custom Droid
+name: Factory Droid
 
 on:
   issue_comment:
@@ -197,73 +197,91 @@ jobs:
         run: |
           SKILL_PROMPT=""
           if [ -n "${{ steps.detect-skills.outputs.skill_list }}" ]; then
-            SKILL_PROMPT="Available skills in .factory/skills: ${{ steps.detect-skills.outputs.skill_list }}
-          Use these skills to guide your work and follow the coding standards they define.
-          "
+            SKILL_PROMPT=$(printf "Available skills in .factory/skills: %s\nUse these skills to guide your work and follow the coding standards they define.\n" "${{ steps.detect-skills.outputs.skill_list }}")
           fi
           
-          cat > /tmp/droid-prompt.txt << EOF
+          # Save current HEAD for comparison later
+          git rev-parse HEAD > /tmp/before-droid.txt
+          
+          cat > /tmp/droid-prompt.txt <<EOF
           You are a senior software engineer with vast knowledge and experience in best practices and coding standards.
           
-          ${SKILL_PROMPT}
-          User Request: ${{ steps.extract.outputs.user_request }}
+          \${SKILL_PROMPT}
+          User Request: \${{ steps.extract.outputs.user_request }}
           
           Context:
-          - This is PR #${{ steps.extract.outputs.pr_number }}
-          - Base branch: ${{ steps.extract.outputs.base_branch }}
-          - Current branch: ${{ steps.extract.outputs.head_branch }}
-          - Repository: ${{ github.repository }}
+          - This is PR #\${{ steps.extract.outputs.pr_number }}
+          - Base branch: \${{ steps.extract.outputs.base_branch }}
+          - Current branch: \${{ steps.extract.outputs.head_branch }}
+          - Repository: \${{ github.repository }}
           
           Instructions:
           1. Analyze the user's request carefully
           2. Explore the codebase to understand the project structure and conventions
           3. Make the necessary code changes following established patterns and standards
           4. Run relevant checks after making changes (lint, typecheck, tests, build, etc.)
-          5. Commit your changes with a clear, descriptive message following conventional commit format
-          6. Provide a summary of what you did
+          5. Provide a summary of what you did
           
           Guidelines:
           - Follow existing code patterns and conventions in the repository
           - Use the package manager detected in the project (npm, yarn, or pnpm)
           - Look for package.json scripts to understand available commands
-          - Fix all errors and warnings before committing
+          - Fix all errors and warnings before finishing
           - Write clean, maintainable, well-documented code
           - Test your changes thoroughly
           EOF
           
           $HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/droid-prompt.txt
 
-      - name: Commit and push changes
+      - name: Detect and push changes
         id: push
         run: |
           git config --global user.name "droid[bot]"
           git config --global user.email "droid[bot]@users.noreply.github.com"
           
-          if [[ -n $(git status -s) ]]; then
-            # Detect commit type from user request
-            REQUEST_LOWER=$(echo "${{ steps.extract.outputs.user_request }}" | tr '[:upper:]' '[:lower:]')
-            
-            if [[ "$REQUEST_LOWER" == *"fix"* ]] || [[ "$REQUEST_LOWER" == *"bug"* ]]; then
-              COMMIT_TYPE="fix"
-            elif [[ "$REQUEST_LOWER" == *"add"* ]] || [[ "$REQUEST_LOWER" == *"implement"* ]]; then
-              COMMIT_TYPE="feat"
-            elif [[ "$REQUEST_LOWER" == *"refactor"* ]]; then
-              COMMIT_TYPE="refactor"
-            elif [[ "$REQUEST_LOWER" == *"test"* ]]; then
-              COMMIT_TYPE="test"
-            elif [[ "$REQUEST_LOWER" == *"doc"* ]]; then
-              COMMIT_TYPE="docs"
-            elif [[ "$REQUEST_LOWER" == *"style"* ]] || [[ "$REQUEST_LOWER" == *"format"* ]]; then
-              COMMIT_TYPE="style"
-            else
-              COMMIT_TYPE="chore"
+          # Check if Droid made any commits
+          BEFORE_HEAD=$(cat /tmp/before-droid.txt)
+          AFTER_HEAD=$(git rev-parse HEAD)
+          
+          # Check for uncommitted changes OR new commits
+          HAS_UNCOMMITTED=$(git status -s)
+          HAS_NEW_COMMITS="false"
+          
+          if [ "$BEFORE_HEAD" != "$AFTER_HEAD" ]; then
+            HAS_NEW_COMMITS="true"
+            echo "Droid made commits: $BEFORE_HEAD -> $AFTER_HEAD"
+          fi
+          
+          if [[ -n "$HAS_UNCOMMITTED" ]] || [[ "$HAS_NEW_COMMITS" == "true" ]]; then
+            # If there are uncommitted changes, commit them
+            if [[ -n "$HAS_UNCOMMITTED" ]]; then
+              # Detect commit type from user request
+              REQUEST_LOWER=$(echo "${{ steps.extract.outputs.user_request }}" | tr '[:upper:]' '[:lower:]')
+              
+              if [[ "$REQUEST_LOWER" == *"fix"* ]] || [[ "$REQUEST_LOWER" == *"bug"* ]]; then
+                COMMIT_TYPE="fix"
+              elif [[ "$REQUEST_LOWER" == *"add"* ]] || [[ "$REQUEST_LOWER" == *"implement"* ]]; then
+                COMMIT_TYPE="feat"
+              elif [[ "$REQUEST_LOWER" == *"refactor"* ]]; then
+                COMMIT_TYPE="refactor"
+              elif [[ "$REQUEST_LOWER" == *"test"* ]]; then
+                COMMIT_TYPE="test"
+              elif [[ "$REQUEST_LOWER" == *"doc"* ]]; then
+                COMMIT_TYPE="docs"
+              elif [[ "$REQUEST_LOWER" == *"style"* ]] || [[ "$REQUEST_LOWER" == *"format"* ]]; then
+                COMMIT_TYPE="style"
+              else
+                COMMIT_TYPE="chore"
+              fi
+              
+              git add -A
+              git commit -m "${COMMIT_TYPE}: ${{ steps.extract.outputs.user_request }}" \
+                         -m "Automated changes by @droid" \
+                         -m "Original request: ${{ steps.extract.outputs.user_request }}" \
+                         -m "Related to PR #${{ steps.extract.outputs.pr_number }}"
             fi
             
-            git add -A
-            git commit -m "${COMMIT_TYPE}: ${{ steps.extract.outputs.user_request }}" \
-                       -m "Automated changes by @droid" \
-                       -m "Original request: ${{ steps.extract.outputs.user_request }}" \
-                       -m "Related to PR #${{ steps.extract.outputs.pr_number }}"
+            # Push all commits (both Droid's and ours)
             git push origin ${{ steps.setup-branch.outputs.droid_branch }}
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
