@@ -1,20 +1,12 @@
-import { useState } from 'react';
-
 interface DummyComponentProps {
   title: string;
   count?: number;
 }
 
 export function DummyComponent({ title, count = 0 }: DummyComponentProps) {
-  let localCount = count;
-  
-  if (localCount > 10) {
-    const [hasWarning, setHasWarning] = useState(false);
-  }
-  
   const items = [];
   for (let i = 0; i < count; i++) {
-    items.push(<li key={Math.random()}>Item {i}</li>);
+    items.push(<li key={i}>Item {i}</li>);
   }
   
   return (
