@@ -291,6 +291,9 @@ jobs:
           
           DESCRIPTION=$($HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/summary-prompt.txt 2>&1 | tail -20 | sed 's/^.*Here is the PR description:[[:space:]]*//' | sed 's/^[[:space:]]*//')
           
+          # Strip control characters (ASCII 0-31 except newline/tab) and other non-printable chars
+          DESCRIPTION=$(echo "$DESCRIPTION" | tr -d '\000-\010\013-\037\177')
+          
           # Save to output, escaping newlines for GitHub Actions
           echo "description<<DESCEOF" >> $GITHUB_OUTPUT
           echo "$DESCRIPTION" >> $GITHUB_OUTPUT
