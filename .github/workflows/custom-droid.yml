@@ -220,7 +220,7 @@ jobs:
           - Test your changes thoroughly
           EOF
           
-          $HOME/.local/bin/droid exec ${{ steps.detect-skills.outputs.skills }} -f /tmp/droid-prompt.txt
+          $HOME/.local/bin/droid exec --skip-permissions-unsafe ${{ steps.detect-skills.outputs.skills }} -f /tmp/droid-prompt.txt
 
       - name: Commit and push changes
         id: push
