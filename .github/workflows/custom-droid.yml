@@ -21,6 +21,8 @@ jobs:
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@droid') || contains(github.event.issue.title, '@droid'))) ||
       (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '@droid') || contains(github.event.pull_request.title, '@droid')))
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: write
       pull-requests: write
@@ -58,8 +60,7 @@ jobs:
         if: steps.detect-pm.outputs.pm != 'none'
         uses: actions/setup-node@v4
         with:
-          node-version-file: '.nvmrc'
-          node-version: '20'
+          node-version: '24'
           cache: ${{ steps.detect-pm.outputs.pm }}
 
       - name: Install dependencies
@@ -259,7 +260,7 @@ jobs:
           
           # Generate summary using git log and diff
           cat > /tmp/summary-prompt.txt <<EOF
-          Analyze the following git commits and changes, then write a concise PR description.
+          Analyze the following git commits and changes.
           
           User's original request: ${{ steps.extract.outputs.user_request }}
           
@@ -269,16 +270,15 @@ jobs:
           Files changed:
           $(git diff --stat ${BEFORE_HEAD}..${AFTER_HEAD})
           
-          Write a clear, professional PR description that:
+          Write a clear, professional PR description (under 500 characters) that:
           1. Starts with a brief summary (1-2 sentences)
           2. Lists the key changes made (bullet points)
           3. Mentions any important technical decisions
-          4. Is under 500 characters
           
-          Output only the PR description text, no extra commentary.
+          CRITICAL: Output ONLY the PR description text itself. Do not include ANY prefixes like "Here is the PR description:" or similar commentary. Just output the description content directly.
           EOF
           
-          DESCRIPTION=$($HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/summary-prompt.txt 2>&1 | tail -20)
+          DESCRIPTION=$($HOME/.local/bin/droid exec --skip-permissions-unsafe -f /tmp/summary-prompt.txt 2>&1 | tail -20 | sed 's/^.*Here is the PR description:[[:space:]]*//' | sed 's/^[[:space:]]*//')
           
           # Save to output, escaping newlines for GitHub Actions
           echo "description<<DESCEOF" >> $GITHUB_OUTPUT
