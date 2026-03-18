@@ -1,0 +1,10 @@
+packages:
+  "recharts": "Beautiful and responsive chart library for the dashboard visualizations"
+  "date-fns": "For formatting transaction dates"
+  "lucide-react": "For beautiful UI icons"
+
+images: []
+
+notes:
+  - "Using wouter for routing as per strict rules, instead of react-router-dom mentioned in notes."
+  - "Mock API implemented locally to simulate network delays and provide realistic tax data."
